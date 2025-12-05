@@ -1,0 +1,18 @@
+@startuml
+
+!include <C4/C4_Container>
+
+title Payment system context diagram
+
+Person(actor, "Actor", "Клиент или пользователь системы")
+
+System(payment_system, "Payment System", "Платежная система банка")
+
+System_Ext(cbp, "CБП", "Система быстрых платежей")
+System_Ext(card_proc, "Карточный процессинг", "Обработка карточных транзакций")
+
+Rel(actor, payment_system, "Инициирует платежи", "REST(Web/Mobile)")
+Rel(payment_system, cbp, "Обрабатывает СБП платежи", "REST")
+Rel(payment_system, card_proc, "Обрабатывает карточные платежи", "REST")
+
+@enduml

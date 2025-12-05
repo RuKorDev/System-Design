@@ -1,0 +1,95 @@
+@startuml
+  !include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+  
+  title Container diagram for Payment system
+  
+  LAYOUT_WITH_LEGEND()
+  
+  Person(customer, "Customer", "A customer of the bank, with personal bank accounts")
+  
+  System_Boundary(c1, "Payment system") {
+  ' Top layer: Gateways and BFF
+  Container(gateway, "Gateway", "Kong")
+  Container(bff, "Aggregate service", "BFF для всех запросов отличных от оплаты")
+
+    ' Middle layer: Core services
+  Container(wallet_service, "Wallet service", "Сервис обеспечивающий работу с кошельком пользователя")
+  Container(payment_initiator_service, "Payments initiator Service", "Сервис инциирующий проведение платежей")
+  Container(payment_executor_service, "Payments processor Service", "Сервис исполняющий платежи")
+  Container(payment_history_service, "Payments History Service", "Сервис истории платежей")
+  Container(anti_fraud_service, "Anti-Fraud Service", "Сервис для оценки операций на предмет подозрительности")
+  Container(notification_service, "Notifications Service", "Сервис для нотификации пользователей")
+  Container(dlt_handler, "Dead letter handler", "Сервис для обработки dlt")
+    
+    ' Middle layer: Integration adapters
+  Container(core_integration_adapter, "Core Integration adapter", "ACL core системы")
+  Container(sbp_adapter, "Sbp adapter", "Адаптер для интеграции с СБП")
+  Container(card_processing_adapter, "Card processing adapter", "Адаптер для отправки платежей в процессинг")
+
+  ' Bottom layer: Databases (under their services)
+    ContainerDb(wallet_db, "Wallet Db", "SQL Database", "хранит информацию о средствах пользователя")
+    ContainerDb(wallet_cache, "Wallet Cache", "Redis", "кеш для кошелька")
+    ContainerDb(payment_initiator_service_db, "Payment initiator Db", "SQL Database", "хранит информацию о поступивших платежах")
+    ContainerDb(payment_history_service_db, "Payment in terminal status Db", "SQL Database", "хранит информацию о завершенных платежах")
+    ContainerDb(payment_executor_db, "Payment executor Db", "SQL Database", "бд для хранения и попытки повторной отправки dlt")
+    ContainerDb(payment_dwh, "Payment DWH", "ClickHouse", "хранилище для аналитики платежей")
+    ContainerDb(anti_fraud_db, "Anti Fraud Db", "SQL Database", "хранит информацию о подозрительных платежах")
+    ContainerDb(dead_letter_db, "DLT Db", "SQL Database", "бд для хранения и попытки повторной отправки dlt")
+    
+    ' Bottom layer: Infrastructure components
+  Container(outbox_processor, "Outbox processor", "Читает события из outbox и отправляет в kafka")
+}
+
+
+  System_Ext(sbp, "SBP", "Система быстрых платежей СБП")
+  System_Ext(keycloack, "Keycloack", "Сервис для аунтификации")
+  System_Ext(core, "Core", "Основной бухгалтерский учёт")
+  System_Ext(card_processing, "Card Processing", "Payment card processing system")
+
+  ' Arrange DB
+Rel(wallet_service, wallet_db, "Reads/Writes")
+Rel(wallet_service, wallet_cache, "Reads/Writes")
+Rel(payment_initiator_service, payment_initiator_service_db, "Writes to")
+Rel(payment_history_service, payment_history_service_db, "Reads/Writes")
+Rel(payment_history_service, payment_dwh, "Writes analytics")
+Rel(anti_fraud_service, anti_fraud_db, "Writes to")
+Rel(dlt_handler, dead_letter_db, "Writes to")
+Rel_Back(outbox_processor, payment_initiator_service_db, "Read outbox events")
+Rel_Back(outbox_processor, payment_executor_db, "Read outbox events")
+Rel_Back(outbox_processor, anti_fraud_db, "Read outbox events")
+Rel_Back(outbox_processor, dead_letter_db, "Read outbox events")
+
+' Customer flow
+  Rel(customer, gateway, "Uses", "HTTPS/REST")
+  Rel(gateway, payment_initiator_service, "Routes payments", "HTTPS/REST")
+  Rel(gateway, bff, "Routes other requests", "HTTPS")
+
+  ' Payment processing flow
+
+Rel(payment_initiator_service, wallet_service, "Reserves funds", "HTTPS/gRPC")
+Rel(payment_initiator_service, anti_fraud_service, "Checks for fraud", "async/kafka")
+Rel(payment_initiator_service, payment_executor_service, "Payment dont need fraud check", "async/kafka")
+Rel(anti_fraud_service, payment_executor_service, "Payment is ok", "async/kafka")
+Rel(payment_executor_service, wallet_service, "Debits funds", "async/kafka")
+Rel(payment_executor_service, core_integration_adapter, "Sends for core", "async/kafka")
+Rel(payment_executor_service, card_processing_adapter, "Sends for card processing", "async/kafka")
+Rel(payment_executor_service, sbp_adapter, "Sends for SBP", "async/kafka")
+Rel(payment_executor_service, payment_history_service, "Sends terminal status", "async/kafka")
+Rel(payment_executor_service, notification_service, "Notifies user", "async/kafka")
+Rel(sbp_adapter, payment_executor_service, "Sends SBP responce", "async/kafka at least once")
+Rel(card_processing_adapter, payment_executor_service, "Sends  card processing responce", "async/kafka at least once")
+Rel(core_integration_adapter, payment_executor_service, "Sends core responce", "async/kafka at least once")
+
+' User operation( wallet check, payments history)
+  Rel(bff, wallet_service, "Balance check", "HTTPS/REST")
+  Rel(bff, payment_history_service, "payments history", "HTTPS/REST")
+
+  ' tech operations
+Rel(outbox_processor, dlt_handler, "Send failed kafka messages")
+Rel(gateway, keycloack, "user authorization")
+
+  ' external integrations
+  Rel(core_integration_adapter, core, "Integrates with", "HTTPS/REST")
+  Rel(card_processing_adapter, card_processing, "Integrates with", "HTTPS/REST")
+  Rel(sbp_adapter, sbp, "Integrates with", "HTTPS/REST")
+@enduml
